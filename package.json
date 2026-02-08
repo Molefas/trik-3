@@ -1,0 +1,22 @@
+{
+  "name": "@muffles/trik-3",
+  "version": "1.0.0",
+  "description": "Article search demo with privilege separation",
+  "type": "module",
+  "main": "dist/graph.js",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublish": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@trikhub/manifest": "^0.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

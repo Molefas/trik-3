@@ -1,0 +1,12 @@
+{
+  "displayName": "Trik 3",
+  "shortDescription": "Trik 2 article search demo with privilege separation",
+  "categories": ["search", "content", "demo"],
+  "keywords": ["articles", "search", "reading", "demo", "privilege-separation"],
+  "author": {
+    "name": "Muffles",
+    "github": "Muffles"
+  },
+  "repository": "https://github.com/Muffles/trik-3",
+  "homepage": "https://github.com/Muffles/trik-3"
+}

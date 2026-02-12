@@ -9,6 +9,11 @@
  * - details: Get article details by ID or natural language reference
  */
 import type { SessionHistoryEntry } from '@trikhub/manifest';
+interface TrikConfigContext {
+    get(key: string): string | undefined;
+    has(key: string): boolean;
+    keys(): string[];
+}
 interface SkillInput {
     input: {
         topic?: string;
@@ -21,6 +26,7 @@ interface SkillInput {
         sessionId: string;
         history: SessionHistoryEntry[];
     };
+    config?: TrikConfigContext;
 }
 interface SearchOutput {
     responseMode: 'template';

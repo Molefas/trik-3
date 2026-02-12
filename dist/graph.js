@@ -9,6 +9,10 @@
  * - details: Get article details by ID or natural language reference
  */
 import Anthropic from '@anthropic-ai/sdk';
+// Helper function to create Anthropic client with explicit API key
+function createAnthropicClient(apiKey) {
+    return new Anthropic({ apiKey });
+}
 // Mock article database
 const ARTICLES = [
     {
@@ -79,8 +83,9 @@ function searchArticles(topic) {
 function getArticleById(id) {
     return ARTICLES.find((a) => a.id === id);
 }
-const anthropic = new Anthropic();
-async function resolveReferenceWithLLM(reference, history) {
+// LLM-based reference resolution using session history
+async function resolveReferenceWithLLM(reference, history, apiKey) {
+    const anthropic = createAnthropicClient(apiKey);
     if (history.length === 0) {
         return null;
     }
@@ -136,34 +141,87 @@ Reply with ONLY the article ID (e.g., "art-001") or "null" if you cannot determi
         return null;
     }
 }
-function handleSearch(topic) {
+// Agent-centric search using LLM for semantic matching
+async function handleSearch(topic, apiKey) {
     if (!topic || typeof topic !== 'string') {
         return {
             responseMode: 'template',
             agentData: { template: 'error' },
         };
     }
-    const { matches, normalizedTopic } = searchArticles(topic);
-    if (matches.length === 0) {
+    try {
+        const anthropic = createAnthropicClient(apiKey);
+        // Build article summaries for the LLM
+        const articleSummaries = ARTICLES.map((a) => `- ${a.id}: "${a.title}" (topics: ${a.topics.join(', ')})`).join('\n');
+        const response = await anthropic.messages.create({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 200,
+            messages: [
+                {
+                    role: 'user',
+                    content: `Given this search query: "${topic}"
+
+Available articles:
+${articleSummaries}
+
+Which articles are relevant to this query? Also categorize the query into one of these topics: AI, technology, science, health, business, other.
+
+Reply in JSON format only, no other text:
+{"matchingIds": ["art-001", "art-002"], "topic": "AI"}`,
+                },
+            ],
+        });
+        const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
+        // Parse the JSON response
+        const result = JSON.parse(text);
+        const matchingIds = result.matchingIds || [];
+        const normalizedTopic = result.topic || 'other';
+        if (matchingIds.length === 0) {
+            return {
+                responseMode: 'template',
+                agentData: {
+                    template: 'empty',
+                    count: 0,
+                    topic: normalizedTopic,
+                    articleIds: [],
+                },
+            };
+        }
         return {
             responseMode: 'template',
             agentData: {
-                template: 'empty',
-                count: 0,
+                template: 'success',
+                count: matchingIds.length,
                 topic: normalizedTopic,
-                articleIds: [],
+                articleIds: matchingIds,
             },
         };
     }
-    return {
-        responseMode: 'template',
-        agentData: {
-            template: 'success',
-            count: matches.length,
-            topic: normalizedTopic,
-            articleIds: matches.map((a) => a.id),
-        },
-    };
+    catch (error) {
+        console.error('[Skill] LLM search failed:', error);
+        // Fallback to simple keyword search
+        const { matches, normalizedTopic } = searchArticles(topic);
+        if (matches.length === 0) {
+            return {
+                responseMode: 'template',
+                agentData: {
+                    template: 'empty',
+                    count: 0,
+                    topic: normalizedTopic,
+                    articleIds: [],
+                },
+            };
+        }
+        return {
+            responseMode: 'template',
+            agentData: {
+                template: 'success',
+                count: matches.length,
+                topic: normalizedTopic,
+                articleIds: matches.map((a) => a.id),
+            },
+        };
+    }
 }
 function handleList(articleIds, history) {
     let targetIds = articleIds;
@@ -211,10 +269,10 @@ function handleList(articleIds, history) {
         },
     };
 }
-async function handleDetails(articleId, reference, history) {
+async function handleDetails(articleId, reference, history, apiKey) {
     let targetId = articleId;
     if (!targetId && reference) {
-        targetId = (await resolveReferenceWithLLM(reference, history)) ?? undefined;
+        targetId = (await resolveReferenceWithLLM(reference, history, apiKey)) ?? undefined;
     }
     if (!targetId) {
         return {
@@ -242,13 +300,21 @@ async function handleDetails(articleId, reference, history) {
     };
 }
 async function invoke(input) {
-    const { action, session } = input;
+    const { action, session, config } = input;
     const history = session?.history ?? [];
+    const apiKey = config?.get('ANTHROPIC_API_KEY');
+    // Check for required API key
+    if (!apiKey) {
+        return {
+            responseMode: 'template',
+            agentData: { template: 'error' },
+        };
+    }
     switch (action) {
         case 'search':
-            return handleSearch(input.input.topic ?? '');
+            return await handleSearch(input.input.topic ?? '', apiKey);
         case 'details':
-            return await handleDetails(input.input.articleId, input.input.reference, history);
+            return await handleDetails(input.input.articleId, input.input.reference, history, apiKey);
         case 'list':
             return handleList(input.input.articleIds, history);
         default:

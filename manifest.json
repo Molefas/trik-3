@@ -169,9 +169,18 @@
     }
   },
 
+  "config": {
+    "required": [
+      {
+        "key": "ANTHROPIC_API_KEY",
+        "description": "Anthropic API key for Claude models (used for reference resolution and semantic search)"
+      }
+    ]
+  },
+
   "limits": {
     "maxExecutionTimeMs": 5000,
-    "maxLlmCalls": 0,
+    "maxLlmCalls": 2,
     "maxToolCalls": 0
   },
 

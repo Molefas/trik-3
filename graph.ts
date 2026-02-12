@@ -12,6 +12,19 @@
 import type { SessionHistoryEntry } from '@trikhub/manifest';
 import Anthropic from '@anthropic-ai/sdk';
 
+// TrikConfigContext interface (matches @trikhub/manifest)
+// Provides access to user-configured values (API keys, tokens, etc.)
+interface TrikConfigContext {
+  get(key: string): string | undefined;
+  has(key: string): boolean;
+  keys(): string[];
+}
+
+// Helper function to create Anthropic client with explicit API key
+function createAnthropicClient(apiKey: string) {
+  return new Anthropic({ apiKey });
+}
+
 // Mock article database
 const ARTICLES = [
   {
@@ -90,12 +103,13 @@ function getArticleById(id: string) {
   return ARTICLES.find((a) => a.id === id);
 }
 
-const anthropic = new Anthropic();
-
+// LLM-based reference resolution using session history
 async function resolveReferenceWithLLM(
   reference: string,
-  history: SessionHistoryEntry[]
+  history: SessionHistoryEntry[],
+  apiKey: string
 ): Promise<string | null> {
+  const anthropic = createAnthropicClient(apiKey);
   if (history.length === 0) {
     return null;
   }
@@ -171,6 +185,7 @@ interface SkillInput {
     sessionId: string;
     history: SessionHistoryEntry[];
   };
+  config?: TrikConfigContext;
 }
 
 interface SearchOutput {
@@ -230,7 +245,10 @@ type ListOutput = ListOutputPassthrough | ListOutputTemplate;
 
 type SkillOutput = SearchOutput | DetailsOutput | ListOutput;
 
-function handleSearch(topic: string): SearchOutput {
+type TopicCategory = 'AI' | 'technology' | 'science' | 'health' | 'business' | 'other';
+
+// Agent-centric search using LLM for semantic matching
+async function handleSearch(topic: string, apiKey: string): Promise<SearchOutput> {
   if (!topic || typeof topic !== 'string') {
     return {
       responseMode: 'template',
@@ -238,29 +256,88 @@ function handleSearch(topic: string): SearchOutput {
     };
   }
 
-  const { matches, normalizedTopic } = searchArticles(topic);
+  try {
+    const anthropic = createAnthropicClient(apiKey);
 
-  if (matches.length === 0) {
+    // Build article summaries for the LLM
+    const articleSummaries = ARTICLES.map(
+      (a) => `- ${a.id}: "${a.title}" (topics: ${a.topics.join(', ')})`
+    ).join('\n');
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      messages: [
+        {
+          role: 'user',
+          content: `Given this search query: "${topic}"
+
+Available articles:
+${articleSummaries}
+
+Which articles are relevant to this query? Also categorize the query into one of these topics: AI, technology, science, health, business, other.
+
+Reply in JSON format only, no other text:
+{"matchingIds": ["art-001", "art-002"], "topic": "AI"}`,
+        },
+      ],
+    });
+
+    const text = response.content[0].type === 'text' ? response.content[0].text.trim() : '';
+
+    // Parse the JSON response
+    const result = JSON.parse(text) as { matchingIds: string[]; topic: TopicCategory };
+    const matchingIds = result.matchingIds || [];
+    const normalizedTopic = result.topic || 'other';
+
+    if (matchingIds.length === 0) {
+      return {
+        responseMode: 'template',
+        agentData: {
+          template: 'empty',
+          count: 0,
+          topic: normalizedTopic,
+          articleIds: [],
+        },
+      };
+    }
+
     return {
       responseMode: 'template',
       agentData: {
-        template: 'empty',
-        count: 0,
+        template: 'success',
+        count: matchingIds.length,
         topic: normalizedTopic,
-        articleIds: [],
+        articleIds: matchingIds,
+      },
+    };
+  } catch (error) {
+    console.error('[Skill] LLM search failed:', error);
+    // Fallback to simple keyword search
+    const { matches, normalizedTopic } = searchArticles(topic);
+
+    if (matches.length === 0) {
+      return {
+        responseMode: 'template',
+        agentData: {
+          template: 'empty',
+          count: 0,
+          topic: normalizedTopic,
+          articleIds: [],
+        },
+      };
+    }
+
+    return {
+      responseMode: 'template',
+      agentData: {
+        template: 'success',
+        count: matches.length,
+        topic: normalizedTopic,
+        articleIds: matches.map((a) => a.id),
       },
     };
   }
-
-  return {
-    responseMode: 'template',
-    agentData: {
-      template: 'success',
-      count: matches.length,
-      topic: normalizedTopic,
-      articleIds: matches.map((a) => a.id),
-    },
-  };
 }
 
 function handleList(
@@ -322,12 +399,13 @@ function handleList(
 async function handleDetails(
   articleId: string | undefined,
   reference: string | undefined,
-  history: SessionHistoryEntry[]
+  history: SessionHistoryEntry[],
+  apiKey: string
 ): Promise<DetailsOutput> {
   let targetId = articleId;
 
   if (!targetId && reference) {
-    targetId = (await resolveReferenceWithLLM(reference, history)) ?? undefined;
+    targetId = (await resolveReferenceWithLLM(reference, history, apiKey)) ?? undefined;
   }
 
   if (!targetId) {
@@ -360,15 +438,24 @@ async function handleDetails(
 }
 
 async function invoke(input: SkillInput): Promise<SkillOutput> {
-  const { action, session } = input;
+  const { action, session, config } = input;
   const history = session?.history ?? [];
+  const apiKey = config?.get('ANTHROPIC_API_KEY');
+
+  // Check for required API key
+  if (!apiKey) {
+    return {
+      responseMode: 'template',
+      agentData: { template: 'error' },
+    } as SearchOutput;
+  }
 
   switch (action) {
     case 'search':
-      return handleSearch(input.input.topic ?? '');
+      return await handleSearch(input.input.topic ?? '', apiKey);
 
     case 'details':
-      return await handleDetails(input.input.articleId, input.input.reference, history);
+      return await handleDetails(input.input.articleId, input.input.reference, history, apiKey);
 
     case 'list':
       return handleList(input.input.articleIds, history);
